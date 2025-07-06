@@ -10,7 +10,7 @@ SOURCE_URL_JAGEL_STATUS = "https://app.jagel.id/api/get-list?comp_vuid=669841991
 
 # URL database Firebase Realtime Anda
 FIREBASE_DB_URL = 'https://grivieproject-default-rtdb.asia-southeast1.firebasedatabase.app/'
-# Path di database Firebase tempat data toko disimpan
+# Path di database Firebase tempat data toko disimpan, dengan view_uid sebagai kunci
 DB_PATH = '/toko_data' 
 
 def initialize_firebase():
@@ -109,8 +109,9 @@ def update_store_status_in_firebase():
     print("Memperbarui status toko di Firebase...")
     ref = db.reference(DB_PATH)
 
-    # --- LANGKAH BARU: Ambil semua kunci yang ada di Firebase ---
-    print("Mengambil kunci-kunci toko yang ada di Firebase...")
+    # --- LANGKAH BARU: Ambil semua kunci yang ada di Firebase (opsional, untuk logging) ---
+    # Jika database sudah dirapikan, kita bisa berasumsi kuncinya adalah view_uid
+    # Namun, mengambilnya tetap berguna untuk verifikasi dan logging.
     existing_firebase_keys_snapshot = ref.get()
     existing_firebase_keys = set(existing_firebase_keys_snapshot.keys()) if existing_firebase_keys_snapshot else set()
     print(f"✅ Ditemukan {len(existing_firebase_keys)} kunci toko di Firebase.")
@@ -122,24 +123,13 @@ def update_store_status_in_firebase():
 
     for store_jagel in stores_to_process:
         if 'title' in store_jagel and 'view_uid' in store_jagel:
-            jagel_title = store_jagel['title']
             jagel_uid = store_jagel['view_uid']
 
-            # Bentuk kedua kemungkinan kunci Firebase
-            key_format_uid = jagel_uid
-            key_format_title_uid = f"{jagel_title} - {jagel_uid}"
-
-            firebase_key_to_use = None
-
-            # Coba temukan kunci yang cocok di Firebase
-            if key_format_uid in existing_firebase_keys:
-                firebase_key_to_use = key_format_uid
-                print(f"  Ditemukan kunci: '{firebase_key_to_use}' (format UID).")
-            elif key_format_title_uid in existing_firebase_keys:
-                firebase_key_to_use = key_format_title_uid
-                print(f"  Ditemukan kunci: '{firebase_key_to_use}' (format Title - UID).")
+            # --- PERUBAHAN DI SINI: Hanya gunakan view_uid sebagai kunci Firebase ---
+            firebase_key_to_use = jagel_uid
+            # --- AKHIR PERUBAHAN ---
             
-            if firebase_key_to_use:
+            if firebase_key_to_use in existing_firebase_keys:
                 is_open_status = store_jagel.get('is_open')
                 close_status_text = store_jagel.get('close_status')
 
@@ -151,13 +141,13 @@ def update_store_status_in_firebase():
                 try:
                     store_ref = ref.child(firebase_key_to_use)
                     store_ref.update(update_data)
-                    print(f"✅ Berhasil memperbarui status untuk toko dengan kunci '{firebase_key_to_use}' (is_open: {is_open_status}).")
+                    print(f"✅ Berhasil memperbarui status untuk toko dengan UID '{firebase_key_to_use}' (is_open: {is_open_status}).")
                     updated_count += 1
                 except Exception as e:
-                    print(f"❌ Gagal memperbarui status untuk toko dengan kunci '{firebase_key_to_use}': {e}")
+                    print(f"❌ Gagal memperbarui status untuk toko dengan UID '{firebase_key_to_use}': {e}")
                     skipped_count += 1
             else:
-                print(f"⚠️ Melewatkan pembaruan untuk toko '{jagel_title}' (UID: {jagel_uid}): Tidak ditemukan kunci yang cocok di Firebase.")
+                print(f"⚠️ Melewatkan pembaruan untuk toko dengan UID '{jagel_uid}': Kunci tidak ditemukan di Firebase. Pastikan kunci sudah ada dari migrasi awal.")
                 not_found_count += 1
         else:
             print(f"⚠️ Melewatkan satu entri dari Jagel API karena tidak memiliki 'title' atau 'view_uid' yang diperlukan: {store_jagel}")
