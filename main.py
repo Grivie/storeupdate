@@ -11,7 +11,6 @@ SOURCE_URL_JAGEL_STATUS = "https://app.jagel.id/api/get-list?comp_vuid=669841991
 # URL database Firebase Realtime Anda
 FIREBASE_DB_URL = 'https://grivieproject-default-rtdb.asia-southeast1.firebasedatabase.app/'
 # Path di database Firebase tempat data toko disimpan
-# Kunci toko di Firebase diasumsikan dalam format "Title - view_uid"
 DB_PATH = '/toko_data' 
 
 def initialize_firebase():
@@ -110,45 +109,61 @@ def update_store_status_in_firebase():
     print("Memperbarui status toko di Firebase...")
     ref = db.reference(DB_PATH)
 
+    # --- LANGKAH BARU: Ambil semua kunci yang ada di Firebase ---
+    print("Mengambil kunci-kunci toko yang ada di Firebase...")
+    existing_firebase_keys_snapshot = ref.get()
+    existing_firebase_keys = set(existing_firebase_keys_snapshot.keys()) if existing_firebase_keys_snapshot else set()
+    print(f"✅ Ditemukan {len(existing_firebase_keys)} kunci toko di Firebase.")
+    # --- AKHIR LANGKAH BARU ---
+
     updated_count = 0
     skipped_count = 0
+    not_found_count = 0
 
     for store_jagel in stores_to_process:
         if 'title' in store_jagel and 'view_uid' in store_jagel:
-            # --- PERBAIKAN DI SINI ---
-            # Asumsi: Kunci di Firebase adalah "Judul Toko - view_uid"
-            # Jika kunci Anda hanya view_uid, kembalikan ke: firebase_key = store_jagel['view_uid']
-            firebase_key = f"{store_jagel['title']} - {store_jagel['view_uid']}"
-            # --- AKHIR PERBAIKAN ---
+            jagel_title = store_jagel['title']
+            jagel_uid = store_jagel['view_uid']
+
+            # Bentuk kedua kemungkinan kunci Firebase
+            key_format_uid = jagel_uid
+            key_format_title_uid = f"{jagel_title} - {jagel_uid}"
+
+            firebase_key_to_use = None
+
+            # Coba temukan kunci yang cocok di Firebase
+            if key_format_uid in existing_firebase_keys:
+                firebase_key_to_use = key_format_uid
+                print(f"  Ditemukan kunci: '{firebase_key_to_use}' (format UID).")
+            elif key_format_title_uid in existing_firebase_keys:
+                firebase_key_to_use = key_format_title_uid
+                print(f"  Ditemukan kunci: '{firebase_key_to_use}' (format Title - UID).")
             
-            is_open_status = store_jagel.get('is_open')
-            close_status_text = store_jagel.get('close_status')
+            if firebase_key_to_use:
+                is_open_status = store_jagel.get('is_open')
+                close_status_text = store_jagel.get('close_status')
 
-            update_data = {
-                'is_open': is_open_status,
-                'close_status': close_status_text
-            }
+                update_data = {
+                    'is_open': is_open_status,
+                    'close_status': close_status_text
+                }
 
-            try:
-                store_ref = ref.child(firebase_key)
-                # Ambil data toko saat ini untuk memastikan kunci ada
-                current_store_data = store_ref.get()
-
-                if current_store_data:
+                try:
+                    store_ref = ref.child(firebase_key_to_use)
                     store_ref.update(update_data)
-                    print(f"✅ Berhasil memperbarui status untuk toko dengan kunci '{firebase_key}' (is_open: {is_open_status}).")
+                    print(f"✅ Berhasil memperbarui status untuk toko dengan kunci '{firebase_key_to_use}' (is_open: {is_open_status}).")
                     updated_count += 1
-                else:
-                    print(f"⚠️ Melewatkan pembaruan untuk '{firebase_key}': Kunci tidak ditemukan di Firebase. Pastikan kunci sudah ada dari migrasi awal.")
+                except Exception as e:
+                    print(f"❌ Gagal memperbarui status untuk toko dengan kunci '{firebase_key_to_use}': {e}")
                     skipped_count += 1
-            except Exception as e:
-                print(f"❌ Gagal memperbarui status untuk toko dengan kunci '{firebase_key}': {e}")
-                skipped_count += 1
+            else:
+                print(f"⚠️ Melewatkan pembaruan untuk toko '{jagel_title}' (UID: {jagel_uid}): Tidak ditemukan kunci yang cocok di Firebase.")
+                not_found_count += 1
         else:
             print(f"⚠️ Melewatkan satu entri dari Jagel API karena tidak memiliki 'title' atau 'view_uid' yang diperlukan: {store_jagel}")
             skipped_count += 1
     
-    message = f"🎉 Proses pembaruan status selesai. Diperbarui: {updated_count}, Dilewati: {skipped_count}."
+    message = f"🎉 Proses pembaruan status selesai. Diperbarui: {updated_count}, Dilewati (error/format API): {skipped_count}, Tidak Ditemukan di Firebase: {not_found_count}."
     print(message)
 
 # Menjalankan fungsi utama ketika skrip dieksekusi
