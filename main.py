@@ -10,7 +10,8 @@ SOURCE_URL_JAGEL_STATUS = "https://app.jagel.id/api/get-list?comp_vuid=669841991
 
 # URL database Firebase Realtime Anda
 FIREBASE_DB_URL = 'https://grivieproject-default-rtdb.asia-southeast1.firebasedatabase.app/'
-# Path di database Firebase tempat data toko disimpan, dengan view_uid sebagai kunci
+# Path di database Firebase tempat data toko disimpan
+# Kunci toko di Firebase diasumsikan dalam format "Title - view_uid"
 DB_PATH = '/toko_data' 
 
 def initialize_firebase():
@@ -20,19 +21,16 @@ def initialize_firebase():
     yang harus disetel sebagai GitHub Secret jika menggunakan GitHub Actions.
     """
     try:
-        # Mengambil konten kunci layanan dari variabel lingkungan (string JSON)
         service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY')
         if not service_account_json:
             print("❌ Variabel lingkungan 'FIREBASE_SERVICE_ACCOUNT_KEY' tidak ditemukan.")
             print("   Pastikan secret ini telah diatur di lingkungan Anda (misalnya GitHub Actions).")
             return False
 
-        # Mengonversi string JSON menjadi dictionary Python
         service_account_info = json.loads(service_account_json)
         
-        # Menginisialisasi Firebase Admin SDK dengan kredensial
         cred = credentials.Certificate(service_account_info)
-        if not firebase_admin._apps: # Memastikan Firebase tidak diinisialisasi ulang
+        if not firebase_admin._apps: 
             firebase_admin.initialize_app(cred, {'databaseURL': FIREBASE_DB_URL})
         print("✅ Berhasil terhubung ke Firebase.")
         return True
@@ -52,14 +50,11 @@ def fetch_data_from_url(url):
     try:
         print(f"Mengambil data dari {url}...")
         response = requests.get(url, timeout=30)
-        response.raise_for_status() # Akan memunculkan HTTPError untuk status kode 4xx/5xx
+        response.raise_for_status() 
         
-        # --- LOG DEBUGGING ---
         print(f"Respons HTTP Status Code: {response.status_code}")
         print(f"Respons HTTP Content-Type: {response.headers.get('Content-Type')}")
-        # Cetak beberapa karakter pertama dari respons teks untuk inspeksi cepat
         print(f"Respons HTTP Raw Text (200 karakter pertama): {response.text[:200]}...")
-        # --- AKHIR LOG DEBUGGING ---
 
         data = response.json()
         print(f"✅ Berhasil mengambil data dari {url}.")
@@ -83,7 +78,6 @@ def update_store_status_in_firebase():
 
     jagel_data = fetch_data_from_url(SOURCE_URL_JAGEL_STATUS)
     
-    # --- LOG DEBUGGING ---
     print(f"Tipe data jagel_data yang diterima: {type(jagel_data)}")
     if isinstance(jagel_data, dict):
         print(f"Kunci yang ada di jagel_data: {list(jagel_data.keys())}")
@@ -91,32 +85,25 @@ def update_store_status_in_firebase():
             print(f"Tipe data jagel_data.get('data'): {type(jagel_data.get('data'))}")
             if isinstance(jagel_data.get('data'), dict) and 'data' in jagel_data.get('data'):
                 print(f"Tipe data jagel_data['data'].get('data'): {type(jagel_data['data'].get('data'))}")
-    # --- AKHIR LOG DEBUGGING ---
 
     stores_to_process = None
     if isinstance(jagel_data, list):
-        # Case 1: Respons API adalah daftar langsung dari objek toko (misal: [toko1, toko2, ...])
         stores_to_process = jagel_data
         print("✅ Data Jagel API adalah daftar langsung dari toko.")
     elif isinstance(jagel_data, dict) and 'data' in jagel_data and \
          isinstance(jagel_data['data'], dict) and 'data' in jagel_data['data'] and \
          isinstance(jagel_data['data']['data'], list):
-        # Case 2: Respons API adalah kamus dengan kunci 'data' yang berisi kamus lain,
-        #         dan kamus kedua ini memiliki kunci 'data' yang berisi daftar toko (struktur paginasi)
         stores_to_process = jagel_data['data']['data']
         print("✅ Data Jagel API adalah kamus bersarang dengan daftar toko di 'data.data'.")
     elif isinstance(jagel_data, dict) and 'data' in jagel_data and isinstance(jagel_data['data'], list):
-        # Case 3: Respons API adalah kamus dengan kunci 'data' yang berisi daftar (struktur non-paginasi)
         stores_to_process = jagel_data['data']
         print("✅ Data Jagel API adalah kamus dengan kunci 'data' yang berisi daftar toko.")
     elif isinstance(jagel_data, dict) and 'view_uid' in jagel_data and 'title' in jagel_data:
-        # Case 4: Respons API adalah objek toko tunggal (misal: {toko1})
-        stores_to_process = [jagel_data] # Bungkus dalam daftar agar bisa diiterasi
+        stores_to_process = [jagel_data] 
         print("✅ Data Jagel API adalah objek toko tunggal.")
     else:
         print("❌ Gagal: Data dari Jagel API tidak valid atau tidak berisi format toko yang dikenali.")
         if jagel_data:
-            # Cetak sebagian struktur data yang diterima untuk membantu debugging
             print(f"Struktur data yang diterima: {json.dumps(jagel_data, indent=2)[:500]}...") 
         return
 
@@ -127,30 +114,35 @@ def update_store_status_in_firebase():
     skipped_count = 0
 
     for store_jagel in stores_to_process:
-        # Memastikan objek toko memiliki 'title' dan 'view_uid' sebelum diproses
         if 'title' in store_jagel and 'view_uid' in store_jagel:
-            # Menggunakan view_uid sebagai kunci Firebase untuk toko
-            firebase_key = store_jagel['view_uid']
+            # --- PERBAIKAN DI SINI ---
+            # Asumsi: Kunci di Firebase adalah "Judul Toko - view_uid"
+            # Jika kunci Anda hanya view_uid, kembalikan ke: firebase_key = store_jagel['view_uid']
+            firebase_key = f"{store_jagel['title']} - {store_jagel['view_uid']}"
+            # --- AKHIR PERBAIKAN ---
             
-            # Mengambil status is_open dan close_status dari data Jagel
             is_open_status = store_jagel.get('is_open')
             close_status_text = store_jagel.get('close_status')
 
-            # Data yang akan diupdate di Firebase
             update_data = {
                 'is_open': is_open_status,
                 'close_status': close_status_text
             }
 
             try:
-                # Mengakses referensi toko di Firebase menggunakan view_uid sebagai kunci
                 store_ref = ref.child(firebase_key)
-                # Menggunakan .update() untuk hanya mengubah bidang tertentu tanpa menimpa seluruh objek
-                store_ref.update(update_data)
-                print(f"✅ Berhasil memperbarui status untuk toko dengan UID '{firebase_key}' (is_open: {is_open_status}).")
-                updated_count += 1
+                # Ambil data toko saat ini untuk memastikan kunci ada
+                current_store_data = store_ref.get()
+
+                if current_store_data:
+                    store_ref.update(update_data)
+                    print(f"✅ Berhasil memperbarui status untuk toko dengan kunci '{firebase_key}' (is_open: {is_open_status}).")
+                    updated_count += 1
+                else:
+                    print(f"⚠️ Melewatkan pembaruan untuk '{firebase_key}': Kunci tidak ditemukan di Firebase. Pastikan kunci sudah ada dari migrasi awal.")
+                    skipped_count += 1
             except Exception as e:
-                print(f"❌ Gagal memperbarui status untuk toko dengan UID '{firebase_key}': {e}")
+                print(f"❌ Gagal memperbarui status untuk toko dengan kunci '{firebase_key}': {e}")
                 skipped_count += 1
         else:
             print(f"⚠️ Melewatkan satu entri dari Jagel API karena tidak memiliki 'title' atau 'view_uid' yang diperlukan: {store_jagel}")
